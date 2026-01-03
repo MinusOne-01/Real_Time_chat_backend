@@ -10,6 +10,10 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@prisma/client": "^6.19.1",
+    "express": "^5.2.1",
+    "ioredis": "^5.8.2",
+    "prisma": "^6.19.1",
     "ws": "^8.18.3"
   },
   "type": "module"
