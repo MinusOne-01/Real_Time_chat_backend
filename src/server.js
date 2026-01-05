@@ -5,6 +5,8 @@ import { saveMessage } from "./services/message.service.js";
 import { prisma } from "./config/prisma.js"
 import app from "./routes/messages.history.js";
 import { redis } from "./config/redis.js";
+import { isRateLimited } from "../src/services/rateLimit.js";
+import { isTypingRateLimited } from "../src/services/typingRateLimit.js";
 
 
 // Create HTTP server (required for upgrade)
@@ -129,11 +131,17 @@ wss.on("connection", async (socket, request) => {
                 message: "You are not in this room",
               });
             }
+
+            if (await isRateLimited(socket.userId)) {
+              return send(socket, "ERROR", {
+                message: "Too many messages. Slow down.",
+              });
+            }
             
             try {
               const message = await saveMessage(prisma, {
                 roomId,
-                senderId: socket.id,
+                senderId: socket.socketId,
                 content,
               });
 
@@ -144,6 +152,37 @@ wss.on("connection", async (socket, request) => {
               console.error(err);
               send(socket, "ERROR", { message: "Failed to save message" });
             }
+        }
+
+        case "TYPING_START": {
+          const { roomId } = payload;
+
+          if (!roomId) {
+            return send(socket, "ERROR", { message: "roomId required" });
+          }
+
+          if (!socket.rooms.has(roomId)) {
+            return send(socket, "ERROR", { message: "Not in room" });
+          }
+
+          if (await isTypingRateLimited(socket.userId)) {
+            return;
+          }
+
+          // Set ephemeral typing state
+          await redis.set(
+            `typing:${roomId}:${socket.userId}`,
+            1,
+            "EX",
+            3
+          );
+
+          // Notify others in room
+          broadcastToRoom(roomId, "USER_TYPING", {
+            userId: socket.userId,
+          });
+
+          break;
         }
 
         default:
