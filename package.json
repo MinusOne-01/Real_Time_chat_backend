@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "cross-env PORT=3000 node src/server.js",
+    "start2": "cross-env PORT=3001 node src/server.js"
   },
   "keywords": [],
   "author": "",
@@ -16,5 +18,8 @@
     "prisma": "^6.19.1",
     "ws": "^8.18.3"
   },
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "cross-env": "^10.1.0"
+  }
 }

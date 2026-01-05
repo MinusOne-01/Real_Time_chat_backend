@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { saveMessage } from "./services/message.service.js";
 import { prisma } from "./config/prisma.js"
 import app from "./routes/messages.history.js";
-import { redis } from "./config/redis.js";
+import { redis, pub, sub } from "./config/redis.js";
 import { isRateLimited } from "../src/services/rateLimit.js";
 import { isTypingRateLimited } from "../src/services/typingRateLimit.js";
 
@@ -14,11 +14,48 @@ const server = http.createServer( app );
 // Attach WebSocket server
 const wss = new WebSocketServer({ server });
 
+ sub.on("pmessage", (pattern, channel, message) => {
+    console.log("Sub P msg!");
+    const { type, payload } = JSON.parse(message);
 
+    if (channel.startsWith("room:")) {
+      const roomId = channel.split(":")[1];
+      broadcastToRoom(roomId, type, payload);
+    }
+
+    if (channel.startsWith("typing:")) {
+      const roomId = channel.split(":")[1];
+      broadcastToRoom(roomId, type, payload);
+    }
+  });
+
+  sub.on("message", (channel, message) => {
+    console.log("Sub msg!");
+    if (channel === "presence"){
+      const { type, payload } = JSON.parse(message);
+      broadcastGlobal(type, payload);
+      console.log("msg sent!");
+    }
+  });
+
+  await sub.psubscribe("room:*", "typing:*");
+  await sub.subscribe("presence");
+
+
+const PORT = process.env.PORT || 3000;
 
 function generateId() {
   return crypto.randomUUID();
 }
+
+function broadcastGlobal(type, payload) {
+  for (const socket of allSockets) {
+    if (socket.readyState === socket.OPEN) {
+      socket.send(JSON.stringify({ type, payload }));
+    }
+  }
+}
+
 
 function broadcastToRoom(roomId, type, payload) {
   const sockets = rooms.get(roomId);
@@ -37,11 +74,14 @@ function send(socket, type, payload = {}) {
 
 const rooms = new Map(); // roomId -> Set<socket>
 
+const allSockets = new Set();
+
 
 
 wss.on("connection", async (socket, request) => {
   console.log("Client connected");
-  
+  allSockets.add(socket);
+
   socket.socketId = generateId();
   socket.userId = socket.socketId;
 
@@ -50,6 +90,14 @@ wss.on("connection", async (socket, request) => {
 
   await redis.sadd(`user:${socket.userId}:sockets`, socket.socketId);
   await redis.sadd("online_users", socket.userId);
+  await pub.publish(
+    "presence",
+    JSON.stringify({
+      type: "USER_ONLINE",
+      payload: { userId: socket.userId },
+    })
+  );
+
 
   console.log(`User ${socket.userId} is online`);
 
@@ -145,7 +193,14 @@ wss.on("connection", async (socket, request) => {
                 content,
               });
 
-              broadcastToRoom(roomId, "NEW_MESSAGE", message);
+              const pmsg = await pub.publish(
+                `room:${roomId}`,
+                JSON.stringify({
+                  type: "NEW_MESSAGE",
+                  payload: message,
+                })
+              );
+              console.log("Pub res -> ", pmsg);
               break;
             }
             catch (err) {
@@ -177,10 +232,13 @@ wss.on("connection", async (socket, request) => {
             3
           );
 
-          // Notify others in room
-          broadcastToRoom(roomId, "USER_TYPING", {
-            userId: socket.userId,
-          });
+          await pub.publish(
+            `typing:${roomId}`,
+            JSON.stringify({
+              type: "USER_TYPING",
+              payload: { userId: socket.userId },
+            })
+          );
 
           break;
         }
@@ -193,6 +251,7 @@ wss.on("connection", async (socket, request) => {
 
   socket.on("close", async () => {
       console.log("Client disconnected");
+      allSockets.delete(socket);
 
       await redis.srem(`user:${socket.userId}:sockets`, socket.socketId);
 
@@ -200,6 +259,13 @@ wss.on("connection", async (socket, request) => {
 
       if(remaining === 0) {
         await redis.srem("online_users", socket.userId);
+        await pub.publish(
+          "presence",
+          JSON.stringify({
+            type: "USER_OFFLINE",
+            payload: { userId: socket.userId },
+          })
+        );
         console.log(`User ${socket.userId} went offline`);
       }
 
@@ -219,6 +285,6 @@ wss.on("connection", async (socket, request) => {
   });
 });
 
-server.listen(3000, () => {
-  console.log("HTTP + WS server running on ws://localhost:3000");
+server.listen(PORT, () => {
+  console.log(`HTTP + WS server running on ws://localhost:${PORT}`);
 });
