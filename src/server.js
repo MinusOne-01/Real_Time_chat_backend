@@ -30,11 +30,9 @@ const wss = new WebSocketServer({ server });
   });
 
   sub.on("message", (channel, message) => {
-    console.log("Sub msg!");
     if (channel === "presence"){
       const { type, payload } = JSON.parse(message);
       broadcastGlobal(type, payload);
-      console.log("msg sent!");
     }
   });
 
